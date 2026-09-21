@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+ * Class-based dark mode so the in-app toggle can override the OS setting.
+ * Dark mode is a token remap (see `.dark` below), not a separate design.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Semantic design tokens. Components use these (bg-background, text-foreground,
+ * border-border, bg-primary, text-muted-foreground, ...) instead of raw palette
+ * values, so re-theming happens in one place.
+ */
+:root {
+  --background: #ffffff;
+  --card: #ffffff;
+  --muted: #fafafa;
+  --foreground: #0a0a0a;
+  --muted-foreground: #666666;
+  --border: #eaeaea;
+  --border-strong: #d4d4d4;
+  --primary: #171717;
+  --primary-hover: #383838;
+  --primary-foreground: #ffffff;
+  --brand: #0070f3;
+  --destructive: #b91c1c;
+  --success: #166534;
+  --warning: #92400e;
+  --ring: #0070f3;
+}
+
+.dark {
+  --background: #000000;
+  --card: #0a0a0a;
+  --muted: #111111;
+  --foreground: #ededed;
+  --muted-foreground: #a1a1a1;
+  --border: #262626;
+  --border-strong: #404040;
+  --primary: #ededed;
+  --primary-hover: #cccccc;
+  --primary-foreground: #0a0a0a;
+  --brand: #3291ff;
+  --destructive: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --ring: #3291ff;
+}
+
+@theme inline {
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --color-background: var(--background);
+  --color-card: var(--card);
+  --color-muted: var(--muted);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-brand: var(--brand);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-ring: var(--ring);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+    scroll-behavior: smooth;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  /* Borders over shadows for separation; bare `border` uses the token colour. */
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* One icon set (Lucide), one stroke weight. */
+  .lucide {
+    stroke-width: 1.75;
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-border bg-card p-5 sm:p-6;
+  }
+
+  .label {
+    @apply mb-2 block text-sm font-medium text-foreground;
+  }
+
+  .input {
+    @apply w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground transition-colors duration-150 placeholder:text-muted-foreground hover:border-border-strong disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-primary-foreground hover:bg-primary-hover;
+  }
+
+  .btn-secondary {
+    @apply border border-border bg-transparent text-foreground hover:bg-muted;
+  }
+
+  .btn-ghost {
+    @apply text-muted-foreground hover:bg-muted hover:text-foreground;
+  }
+
+  .icon-btn {
+    @apply inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
