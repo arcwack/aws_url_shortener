@@ -58,8 +58,7 @@ def lambda_handler(event, context):
                 ConditionExpression="attribute_not_exists(short_code)",
             )
             host = event.get("requestContext", {}).get("domainName", "")
-            stage = event.get("requestContext", {}).get("stage", "")
-            short_url = f"https://{host}/{stage}/{code}" if host else code
+            short_url = f"https://{host}/{code}" if host else code
             return response(201, {"short_code": code, "short_url": short_url})
         except ClientError as e:
             if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
