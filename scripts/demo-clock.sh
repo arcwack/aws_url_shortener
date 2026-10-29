@@ -14,7 +14,7 @@ MODE="${1:-weekend}"
 PROFILE="${AWS_PROFILE:-urlshortener}"
 REGION="${AWS_REGION:-ap-south-1}"
 FUNCTION="${REDIRECT_FUNCTION:-RedirectFunction}"
-QUEUE_URL="${CLICK_QUEUE_URL:-https://sqs.ap-south-1.amazonaws.com/460047017901/ClickQueue-DLQ}"
+QUEUE_URL="${CLICK_QUEUE_URL:-https://sqs.ap-south-1.amazonaws.com/460047017901/ClickQueue}"
 
 case "$MODE" in
   weekend)
@@ -35,11 +35,23 @@ case "$MODE" in
     ;;
 esac
 
-ENVIRONMENT="Variables={TABLE_NAME=URLs,CLICK_QUEUE_URL=$QUEUE_URL,DEBUG_OVERRIDES=1,DEFAULT_TIMEZONE=Asia/Kolkata"
-if [ -n "$FORCE_TIME" ]; then
-  ENVIRONMENT="$ENVIRONMENT,DEMO_FORCE_TIME=$FORCE_TIME"
-fi
-ENVIRONMENT="$ENVIRONMENT}"
+CURRENT_ENV=$(aws lambda get-function-configuration \
+  --function-name "$FUNCTION" \
+  --profile "$PROFILE" \
+  --region "$REGION" \
+  --query 'Environment.Variables' \
+  --output json)
+
+# Merge, so UNLOCK_COOKIE_SECRET and the other variables are preserved.
+ENVIRONMENT=$(printf '%s' "$CURRENT_ENV" | jq -r \
+  --arg force "$FORCE_TIME" \
+  --arg queue "$QUEUE_URL" '
+    .CLICK_QUEUE_URL = (.CLICK_QUEUE_URL // $queue) |
+    .DEBUG_OVERRIDES = "1" |
+    .DEFAULT_TIMEZONE = "Asia/Kolkata" |
+    (if $force == "" then del(.DEMO_FORCE_TIME) else .DEMO_FORCE_TIME = $force end) |
+    "Variables={" + (to_entries | map("\(.key)=\(.value)") | join(",")) + "}"
+  ')
 
 aws lambda update-function-configuration \
   --function-name "$FUNCTION" \

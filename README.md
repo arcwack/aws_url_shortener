@@ -14,16 +14,22 @@ website hosting.
 - **Architecture** — a dependency-free HTML/CSS diagram of the current request
   path and the planned async analytics path, plus Done / In progress / Planned
   status lists. All status data lives in `src/status.ts`.
-- **Stats** — a clearly-labelled mock analytics preview: total clicks, a 7-day
-  bar chart drawn with plain CSS, and a recent-clicks table.
+- **Stats** — live clicks from the SQS → AnalyticsProcessor → DynamoDB
+  pipeline: total clicks, unique source IPs, top rule, a 7-day bar chart and
+  recent clicks with their matched rule and destination.
 - **Smart Rules** — live time-based routing. Edit weekday/weekend destinations
   and the timezone, save the rule to DynamoDB, and evaluate any moment with the
   built-in simulator. The same short URL resolves to the real 302.
+- **Password gate** — tick “Password protect this link” while shortening and the
+  app opens Smart Rules for password setup. Protected links show an unlock form;
+  only a PBKDF2 hash with a per-link salt is stored. It composes with the
+  schedule rule.
 - Geo/language, device and loot-box rules are the next rule types for the same
   engine.
 
-The Stats tab is still a preview. Live analytics will arrive once the
-SQS → AnalyticsProcessor pipeline is fixed and wired up.
+Every redirect publishes a click event to SQS; AnalyticsProcessor writes it to
+the `Analytics` table with the matched rule and destination. StatsFunction
+aggregates those items for the Stats tab.
 
 ## Tech stack
 
@@ -75,9 +81,8 @@ npm run lint     # run oxlint
 
 ```
 src/
-  api.ts                     shorten + rule config + resolve preview calls
+  api.ts                     shorten, rules, password, preview and stats calls
   status.ts                  architecture/build status data (single source of truth)
-  mockStats.ts               deterministic mock analytics
   storage.ts                 localStorage helpers for "Recent links"
   clipboard.ts               copy-to-clipboard helper with fallback
   components/
@@ -86,9 +91,8 @@ src/
     ResultCard.tsx           short link, copy / open, expiry
     RecentLinks.tsx          persisted recent links list
     ArchitectureView.tsx     diagram + status lists
-    StatsView.tsx            mock stats + CSS bar chart
+    StatsView.tsx            live stats + CSS bar chart
     RulesView.tsx            live schedule editor + simulator
-    PreviewBanner.tsx        "mock data" banner
     Spinner.tsx              inline loading spinner
   App.tsx                    header, tabs, panels, footer
   index.css                  Tailwind import, theme tokens, component classes
@@ -101,9 +105,13 @@ component.
 
 | Method | Path | Purpose |
 | ------ | ---- | ------- |
-| GET | `/links/{code}/rules` | Read the stored `redirect_config` |
+| GET | `/links/{code}/rules` | Read the stored `redirect_config` and password flag |
 | PUT | `/links/{code}/rules` | Validate and save a schedule rule to DynamoDB |
+| PUT | `/links/{code}/password` | Hash and store a PBKDF2 password |
+| DELETE | `/links/{code}/password` | Remove the password gate |
+| POST | `/{code}/unlock` | Verify the password and set the unlock cookie |
 | GET | `/resolve/{code}?simulate_time=...` | Evaluate the rule without redirecting |
+| GET | `/stats/{code}` | Live click aggregates for the Stats tab |
 
 `simulate_time` is a naive local timestamp interpreted in the rule's timezone,
 e.g. `2026-10-31T10:00`. The simulator uses this endpoint, so demoing a weekend
@@ -133,6 +141,14 @@ Toggle it from the repo:
 The `demo/` folder contains the two destination pages: `weekday.html` shows the
 2-second “Taking you to VTOP” notice, and `weekend.html` shows “Weekend closed
 for service”. Both are uploaded to the demo S3 bucket.
+
+### Password storage
+
+`password_hash` is `pbkdf2_sha256$600000$<salt>$<digest>` with a random 16-byte
+salt per link. Wrong passwords are compared in constant time and add a short
+delay. Successful unlocks receive a signed `HttpOnly; Secure; SameSite=Lax`
+cookie valid for one hour, signed with `UNLOCK_COOKIE_SECRET` and the link’s
+`password_version`. Changing or removing the password invalidates old cookies.
 
 ## Deploying `dist/` to S3 static website hosting
 

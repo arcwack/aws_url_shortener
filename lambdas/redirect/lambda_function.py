@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 import boto3
 from botocore.exceptions import ClientError
 
+import passwords
+
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ.get("TABLE_NAME", "URLs"))
 
@@ -21,6 +23,11 @@ CLICK_QUEUE_URL = os.environ.get(
 DEBUG_OVERRIDES = os.environ.get("DEBUG_OVERRIDES", "").lower() in {"1", "true", "yes"}
 DEFAULT_TIMEZONE = os.environ.get("DEFAULT_TIMEZONE", "Asia/Kolkata")
 DEMO_FORCE_TIME = os.environ.get("DEMO_FORCE_TIME", "").strip()
+UNLOCK_COOKIE_SECRET = os.environ.get("UNLOCK_COOKIE_SECRET", "")
+try:
+    UNLOCK_TTL_SECONDS = int(os.environ.get("UNLOCK_TTL_SECONDS", "3600"))
+except ValueError:
+    UNLOCK_TTL_SECONDS = 3600
 SUPPORTED_RULES = {"schedule"}
 
 
@@ -126,11 +133,50 @@ def _is_expired(item):
     return expires_at is not None and int(expires_at) < int(time.time())
 
 
+def _html_response(status, body):
+    return {
+        "statusCode": status,
+        "headers": {
+            "Content-Type": "text/html; charset=utf-8",
+            "Cache-Control": "no-store",
+        },
+        "body": body,
+    }
+
+
+def _headers(event):
+    return {str(key).lower(): (value or "") for key, value in (event.get("headers") or {}).items()}
+
+
 def _parse_body(event):
     raw = event.get("body") or "{}"
     if event.get("isBase64Encoded"):
         raw = base64.b64decode(raw).decode("utf-8")
     return json.loads(raw)
+
+
+def _parse_form_body(event):
+    raw = event.get("body") or ""
+    if event.get("isBase64Encoded"):
+        raw = base64.b64decode(raw).decode("utf-8")
+    return {key: values[-1] for key, values in parse_qs(raw).items()}
+
+
+def _password_page(event, code, error=None):
+    raw_query = event.get("rawQueryString") or ""
+    action = f"/{code}/unlock" + (f"?{raw_query}" if raw_query else "")
+    return passwords.render_password_page(code, action, error)
+
+
+def _has_unlock_cookie(event, code, item):
+    if not UNLOCK_COOKIE_SECRET:
+        return False
+    return passwords.verify_unlock_cookie(
+        event,
+        code,
+        passwords.password_version(item),
+        UNLOCK_COOKIE_SECRET,
+    )
 
 
 def _clean_schedule_config(raw):
@@ -186,8 +232,133 @@ def _handle_get_rules(event):
             "short_url": _short_url(event, code),
             "original_url": item.get("original_url"),
             "redirect_config": item.get("redirect_config"),
+            "password_protected": bool(item.get("password_hash")),
         },
     )
+
+
+def _handle_set_password(event):
+    code = _short_code(event)
+    if not code:
+        return _json_response(400, {"error": "Missing short code"})
+
+    try:
+        body = _parse_body(event)
+        password_hash = passwords.hash_password(body.get("password"))
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response(400, {"error": str(exc)})
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        table.update_item(
+            Key={"short_code": code},
+            UpdateExpression=(
+                "SET password_hash = :hash, password_version = :version, "
+                "password_updated_at = :updated_at"
+            ),
+            ConditionExpression="attribute_exists(short_code)",
+            ExpressionAttributeValues={
+                ":hash": password_hash,
+                ":version": now,
+                ":updated_at": now,
+            },
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _json_response(404, {"error": "Short link not found"})
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    return _json_response(
+        200,
+        {
+            "short_code": code,
+            "short_url": _short_url(event, code),
+            "password_protected": True,
+        },
+    )
+
+
+def _handle_remove_password(event):
+    code = _short_code(event)
+    if not code:
+        return _json_response(400, {"error": "Missing short code"})
+
+    try:
+        table.update_item(
+            Key={"short_code": code},
+            UpdateExpression="REMOVE password_hash, password_version, password_updated_at",
+            ConditionExpression="attribute_exists(short_code)",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _json_response(404, {"error": "Short link not found"})
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    return _json_response(
+        200,
+        {
+            "short_code": code,
+            "short_url": _short_url(event, code),
+            "password_protected": False,
+        },
+    )
+
+
+def _handle_unlock(event):
+    code = _short_code(event)
+    if not code:
+        return _html_response(400, "Missing short code")
+
+    try:
+        item = _load_item(code)
+    except ClientError as exc:
+        print(f"DynamoDB error: {exc}")
+        return _html_response(500, "Internal error")
+
+    if not item or _is_expired(item):
+        return _html_response(404, "Short link not found or expired")
+
+    stored = item.get("password_hash")
+    if not stored:
+        return _html_response(400, _password_page(event, code, "This link is not password protected."))
+
+    try:
+        form = _parse_form_body(event)
+    except Exception:
+        form = {}
+
+    if not passwords.verify_password(form.get("password", ""), stored):
+        time.sleep(0.25)
+        return _html_response(401, _password_page(event, code, "Incorrect password. Try again."))
+
+    target, rule = resolve_target(item, event)
+    if not _valid_url(target):
+        return _html_response(404, "Short link has no valid destination")
+
+    if not UNLOCK_COOKIE_SECRET:
+        print("UNLOCK_COOKIE_SECRET is not configured")
+        return _html_response(500, "Unlock is not configured")
+
+    cookie = passwords.make_unlock_cookie(
+        code,
+        passwords.password_version(item),
+        UNLOCK_COOKIE_SECRET,
+        UNLOCK_TTL_SECONDS,
+    )
+    _publish_click(event, code, target, rule)
+
+    return {
+        "statusCode": 302,
+        "headers": {
+            "Location": target,
+            "Cache-Control": "no-store",
+            "X-Redirect-Rule": rule,
+        },
+        "cookies": [cookie],
+        "body": "",
+    }
 
 
 def _handle_put_rules(event):
@@ -226,6 +397,7 @@ def _handle_put_rules(event):
             "short_url": _short_url(event, code),
             "original_url": attributes.get("original_url"),
             "redirect_config": config,
+            "password_protected": bool(attributes.get("password_hash")),
         },
     )
 
@@ -284,7 +456,7 @@ def _handle_preview(event):
 def _publish_click(event, code, target, rule):
     request_context = event.get("requestContext") or {}
     http_data = request_context.get("http") or {}
-    headers = {str(k).lower(): (v or "") for k, v in (event.get("headers") or {}).items()}
+    headers = _headers(event)
 
     payload = {
         "short_code": code,
@@ -322,6 +494,9 @@ def _handle_redirect(event):
     if _is_expired(item):
         return {"statusCode": 404, "body": "Short link not found or expired"}
 
+    if item.get("password_hash") and not _has_unlock_cookie(event, code, item):
+        return _html_response(200, _password_page(event, code))
+
     target, rule = resolve_target(item, event)
     if not _valid_url(target):
         return {"statusCode": 404, "body": "Short link has no valid destination"}
@@ -342,6 +517,12 @@ def _handle_redirect(event):
 def lambda_handler(event, context):
     route = event.get("routeKey") or ""
 
+    if route == "POST /{short_code}/unlock":
+        return _handle_unlock(event)
+    if route == "PUT /links/{short_code}/password":
+        return _handle_set_password(event)
+    if route == "DELETE /links/{short_code}/password":
+        return _handle_remove_password(event)
     if route == "GET /links/{short_code}/rules":
         return _handle_get_rules(event)
     if route == "PUT /links/{short_code}/rules":

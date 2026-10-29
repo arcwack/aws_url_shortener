@@ -29,24 +29,40 @@ export default function App() {
     originalUrl: string
     createdAt: string
   } | null>(null)
+  const [passwordSetup, setPasswordSetup] = useState<{
+    code: string
+    nonce: number
+  } | null>(null)
 
-  const handleCreated = useCallback((result: ShortenResult, originalUrl: string) => {
-    const createdAt = new Date().toISOString()
-    setCreated({ result, originalUrl, createdAt })
-    setRecentLinks((current) => {
-      const next: RecentLink[] = [
-        {
-          short_code: result.short_code,
-          short_url: result.short_url,
-          original_url: originalUrl,
-          created_at: createdAt,
-        },
-        ...current.filter((link) => link.short_code !== result.short_code),
-      ].slice(0, MAX_RECENT_LINKS)
-      saveRecentLinks(next)
-      return next
-    })
-  }, [])
+  const handleCreated = useCallback(
+    (
+      result: ShortenResult,
+      originalUrl: string,
+      options: { passwordProtected: boolean },
+    ) => {
+      const createdAt = new Date().toISOString()
+      setCreated({ result, originalUrl, createdAt })
+      setRecentLinks((current) => {
+        const next: RecentLink[] = [
+          {
+            short_code: result.short_code,
+            short_url: result.short_url,
+            original_url: originalUrl,
+            created_at: createdAt,
+          },
+          ...current.filter((link) => link.short_code !== result.short_code),
+        ].slice(0, MAX_RECENT_LINKS)
+        saveRecentLinks(next)
+        return next
+      })
+
+      if (options.passwordProtected) {
+        setPasswordSetup({ code: result.short_code, nonce: Date.now() })
+        setActiveTab('rules')
+      }
+    },
+    [],
+  )
 
   const handleClearRecent = useCallback(() => {
     setRecentLinks([])
@@ -100,7 +116,12 @@ export default function App() {
 
           {activeTab === 'architecture' ? <ArchitectureView /> : null}
           {activeTab === 'stats' ? <StatsView /> : null}
-          {activeTab === 'rules' ? <RulesView /> : null}
+          {activeTab === 'rules' ? (
+            <RulesView
+              initialCode={passwordSetup?.code}
+              passwordSetupNonce={passwordSetup?.nonce}
+            />
+          ) : null}
         </div>
       </main>
 

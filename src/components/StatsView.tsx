@@ -1,11 +1,38 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { getStats } from '../api'
-import type { Stats } from '../mockStats'
-import PreviewBanner from './PreviewBanner'
+import type { Stats } from '../api'
+import { loadRecentLinks } from '../storage'
 import Spinner from './Spinner'
 
-const DEFAULT_CODE = 'abc1234'
+const DEFAULT_CODE = 'uDI5wn'
+
+function normalizeCode(value: string): string {
+  const trimmed = value.trim()
+  if (!trimmed) return ''
+
+  try {
+    const url = new URL(trimmed)
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      return url.pathname.split('/').filter(Boolean)[0] ?? ''
+    }
+  } catch {
+    // Not an absolute URL; fall through to the path-only parser.
+  }
+
+  const withoutScheme = trimmed.replace(/^https?:\/\//i, '')
+  const parts = withoutScheme.split('/').filter(Boolean)
+  if (parts.length > 1 && parts[0]?.includes('.')) {
+    return parts[1]?.split('?')[0] ?? ''
+  }
+
+  const first = parts[0]?.split('?')[0] ?? ''
+  return first.includes('.') ? '' : first
+}
+
+function compactUrl(value: string): string {
+  return value.replace(/^https?:\/\//, '')
+}
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
   dateStyle: 'medium',
@@ -28,6 +55,7 @@ function Stat({ label, value, hint }: { label: string; value: string; hint: stri
 }
 
 export default function StatsView() {
+  const [recentLinks] = useState(() => loadRecentLinks())
   const [inputCode, setInputCode] = useState(DEFAULT_CODE)
   const [request, setRequest] = useState({ code: DEFAULT_CODE, nonce: 0 })
   const [stats, setStats] = useState<Stats | null>(null)
@@ -55,34 +83,22 @@ export default function StatsView() {
     }
   }, [request])
 
-  function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const trimmed = inputCode.trim()
-    if (!trimmed) {
-      setError('Enter a short code to preview.')
-      return
-    }
+  function loadCode(code: string) {
+    setInputCode(code)
     setLoading(true)
     setError(null)
-    setRequest((current) => ({ code: trimmed, nonce: current.nonce + 1 }))
+    setRequest((current) => ({ code, nonce: current.nonce + 1 }))
   }
 
-  const topCountry = useMemo(() => {
-    if (!stats) return '—'
-    const counts = new Map<string, number>()
-    for (const click of stats.recent) {
-      counts.set(click.country, (counts.get(click.country) ?? 0) + 1)
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const code = normalizeCode(inputCode)
+    if (!code) {
+      setError('Paste a short code or a full short URL.')
+      return
     }
-    let best = '—'
-    let bestCount = 0
-    for (const [country, count] of counts) {
-      if (count > bestCount) {
-        best = country
-        bestCount = count
-      }
-    }
-    return best
-  }, [stats])
+    loadCode(code)
+  }
 
   const maxClicks = stats ? Math.max(...stats.daily.map((day) => day.clicks), 1) : 1
 
@@ -90,14 +106,14 @@ export default function StatsView() {
     <div className="space-y-6">
       <header>
         <h2 className="text-xl font-semibold text-foreground">Stats</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Click analytics for a short link.</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Live click analytics from the SQS → AnalyticsProcessor pipeline.
+        </p>
       </header>
-
-      <PreviewBanner />
 
       <form onSubmit={handleSubmit} className="card">
         <label htmlFor="stats-code" className="label">
-          Short code
+          Short code or short URL
         </label>
         <div className="flex flex-col gap-3 sm:flex-row">
           <input
@@ -106,7 +122,7 @@ export default function StatsView() {
             type="text"
             spellCheck={false}
             autoComplete="off"
-            placeholder="abc1234"
+            placeholder="uDI5wn or https://go.devansharora.in/uDI5wn"
             value={inputCode}
             onChange={(event) => setInputCode(event.target.value)}
             className="input font-mono sm:flex-1"
@@ -123,8 +139,31 @@ export default function StatsView() {
           </button>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
-          Try <span className="font-mono">abc1234</span> — every code returns a different preview.
+          Paste the code or the full link copied from the Shorten tab. Try{' '}
+          <span className="font-mono">uDI5wn</span> for the demo.
         </p>
+
+        {recentLinks.length > 0 ? (
+          <div className="mt-4 border-t border-border pt-3">
+            <p className="text-xs font-medium text-muted-foreground">Recent links</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {recentLinks.slice(0, 5).map((link) => (
+                <button
+                  key={link.short_code}
+                  type="button"
+                  onClick={() => loadCode(link.short_code)}
+                  disabled={loading}
+                  className="inline-flex max-w-full items-center gap-2 rounded-full border border-border bg-background px-3 py-1 text-xs text-foreground transition-colors duration-150 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <span className="shrink-0 font-mono font-medium">{link.short_code}</span>
+                  <span className="hidden max-w-[12rem] truncate text-muted-foreground sm:inline">
+                    {compactUrl(link.original_url)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </form>
 
       {error ? (
@@ -149,15 +188,25 @@ export default function StatsView() {
             <Stat
               label="Total clicks"
               value={stats.totalClicks.toLocaleString()}
-              hint={`for /${stats.code}`}
+              hint={
+                stats.lastClick
+                  ? `last click ${formatDateTime(stats.lastClick)}`
+                  : `for /${stats.code}`
+              }
             />
             <Stat
-              label="Unique visitors"
+              label="Unique IPs"
               value={stats.uniqueVisitors.toLocaleString()}
-              hint="estimated"
+              hint="distinct source IPs"
             />
-            <Stat label="Top country" value={topCountry} hint="from recent clicks" />
+            <Stat label="Top rule" value={stats.topRule} hint="most common branch" />
           </div>
+
+          {stats.totalClicks === 0 ? (
+            <p className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+              No clicks recorded yet. Open the short link, then load stats again.
+            </p>
+          ) : null}
 
           <section className="card">
             <h3 className="text-sm font-medium text-foreground">Clicks per day</h3>
@@ -172,7 +221,12 @@ export default function StatsView() {
                 <div key={day.date} className="flex h-full flex-1 items-end">
                   <div
                     title={`${day.label}: ${day.clicks} clicks`}
-                    style={{ height: `${Math.max(4, Math.round((day.clicks / maxClicks) * 100))}%` }}
+                    style={{
+                      height:
+                        day.clicks === 0
+                          ? '0%'
+                          : `${Math.max(4, Math.round((day.clicks / maxClicks) * 100))}%`,
+                    }}
                     className="w-full rounded-t bg-brand transition-[height] duration-300"
                   />
                 </div>
@@ -207,10 +261,13 @@ export default function StatsView() {
                       When
                     </th>
                     <th scope="col" className="py-2 pr-4 font-medium">
-                      Country
+                      Rule
+                    </th>
+                    <th scope="col" className="py-2 pr-4 font-medium">
+                      Device
                     </th>
                     <th scope="col" className="py-2 font-medium">
-                      Device
+                      Destination
                     </th>
                   </tr>
                 </thead>
@@ -220,13 +277,26 @@ export default function StatsView() {
                       <td className="py-2.5 pr-4 whitespace-nowrap text-muted-foreground">
                         {formatDateTime(click.timestamp)}
                       </td>
-                      <td className="py-2.5 pr-4 text-foreground">{click.country}</td>
-                      <td className="py-2.5 text-foreground">{click.device}</td>
+                      <td className="py-2.5 pr-4 font-mono text-xs text-foreground">
+                        {click.matchedRule}
+                      </td>
+                      <td className="py-2.5 pr-4 text-foreground">{click.device}</td>
+                      <td className="py-2.5 font-mono text-xs text-muted-foreground">
+                        <span
+                          className="block max-w-[16rem] truncate"
+                          title={click.destination}
+                        >
+                          {click.destination}
+                        </span>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            {stats.recent.length === 0 ? (
+              <p className="mt-3 text-sm text-muted-foreground">No clicks recorded yet.</p>
+            ) : null}
           </section>
         </>
       ) : null}

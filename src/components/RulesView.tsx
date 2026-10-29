@@ -6,6 +6,7 @@ import {
   Clock3,
   Copy,
   ExternalLink,
+  LockKeyhole,
   Play,
   Save,
   TriangleAlert,
@@ -13,7 +14,13 @@ import {
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { getRuleConfig, resolvePreview, saveScheduleRule } from '../api'
+import {
+  getRuleConfig,
+  removeLinkPassword,
+  resolvePreview,
+  saveScheduleRule,
+  setLinkPassword,
+} from '../api'
 import type { ResolvePreview, ScheduleConfig } from '../api'
 import { copyToClipboard } from '../clipboard'
 import { loadRecentLinks } from '../storage'
@@ -198,10 +205,18 @@ function DestinationField({
   )
 }
 
-export default function RulesView() {
+interface RulesViewProps {
+  initialCode?: string
+  passwordSetupNonce?: number
+}
+
+export default function RulesView({
+  initialCode = DEMO_CODE,
+  passwordSetupNonce,
+}: RulesViewProps) {
   const recentLinks = useState(() => loadRecentLinks())[0]
 
-  const [code, setCode] = useState(DEMO_CODE)
+  const [code, setCode] = useState(initialCode)
   const [shortUrl, setShortUrl] = useState('')
   const [originalUrl, setOriginalUrl] = useState('')
 
@@ -216,6 +231,14 @@ export default function RulesView() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
   const [savedAt, setSavedAt] = useState<Date | null>(null)
+
+  const [passwordProtected, setPasswordProtected] = useState(false)
+  const [password, setPassword] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [passwordError, setPasswordError] = useState<string | null>(null)
+  const [passwordSavedAt, setPasswordSavedAt] = useState<Date | null>(null)
+  const passwordSectionRef = useRef<HTMLElement | null>(null)
+  const passwordInputRef = useRef<HTMLInputElement | null>(null)
 
   const [simulateTime, setSimulateTime] = useState('')
   const [previewing, setPreviewing] = useState(false)
@@ -239,6 +262,15 @@ export default function RulesView() {
   }, [])
 
   useEffect(() => {
+    if (!passwordSetupNonce) return
+    const timer = window.setTimeout(() => {
+      passwordSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      passwordInputRef.current?.focus({ preventScroll: true })
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [passwordSetupNonce])
+
+  useEffect(() => {
     let cancelled = false
 
     async function load() {
@@ -255,6 +287,10 @@ export default function RulesView() {
         setWeekdayUrl(config.weekday_url)
         setWeekendUrl(config.weekend_url)
         setHasRule(Boolean(data.redirect_config))
+        setPasswordProtected(data.password_protected)
+        setPassword('')
+        setPasswordError(null)
+        setPasswordSavedAt(null)
         setLoadingRule(false)
 
         try {
@@ -364,6 +400,10 @@ export default function RulesView() {
     setHistory([])
     setSavedAt(null)
     setSimulateTime('')
+    setPasswordProtected(false)
+    setPassword('')
+    setPasswordError(null)
+    setPasswordSavedAt(null)
   }
 
   function handleScenario(dayIndex: number) {
@@ -410,6 +450,51 @@ export default function RulesView() {
       setSaveError(caught instanceof Error ? caught.message : 'Could not save the rule.')
     } finally {
       setSaving(false)
+    }
+  }
+
+  async function handlePasswordSave() {
+    if (password.length < 8 || !password.trim()) {
+      setPasswordError('Use at least 8 characters.')
+      return
+    }
+    if (password.length > 128) {
+      setPasswordError('Use at most 128 characters.')
+      return
+    }
+
+    setPasswordSaving(true)
+    setPasswordError(null)
+    setPasswordSavedAt(null)
+
+    try {
+      const result = await setLinkPassword(code, password)
+      setPasswordProtected(result.password_protected)
+      setPassword('')
+      setPasswordSavedAt(new Date())
+    } catch (caught) {
+      setPasswordError(caught instanceof Error ? caught.message : 'Could not set the password.')
+    } finally {
+      setPasswordSaving(false)
+    }
+  }
+
+  async function handlePasswordRemove() {
+    setPasswordSaving(true)
+    setPasswordError(null)
+    setPasswordSavedAt(null)
+
+    try {
+      const result = await removeLinkPassword(code)
+      setPasswordProtected(result.password_protected)
+      setPassword('')
+      setPasswordSavedAt(new Date())
+    } catch (caught) {
+      setPasswordError(
+        caught instanceof Error ? caught.message : 'Could not remove the password.',
+      )
+    } finally {
+      setPasswordSaving(false)
     }
   }
 
@@ -553,6 +638,13 @@ export default function RulesView() {
               </span>
             )}
           </div>
+
+          {!hasRule && !loadingRule ? (
+            <p className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              No schedule saved yet. After unlock, this link goes to its original URL. Saving a
+              schedule is optional.
+            </p>
+          ) : null}
 
           <div className="mt-5 space-y-3">
             <DestinationField
@@ -897,6 +989,121 @@ export default function RulesView() {
         </section>
       </div>
 
+      <section
+        ref={passwordSectionRef}
+        className="card"
+        aria-labelledby="password-heading"
+      >
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <LockKeyhole className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <h3 id="password-heading" className="text-sm font-medium text-foreground">
+                Password protection
+              </h3>
+            </div>
+            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+              Visitors see a password page before the redirect. Only a PBKDF2 hash with a
+              per-link salt is stored; the plaintext never leaves this form.
+            </p>
+          </div>
+          {passwordProtected ? (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-success/30 bg-success/10 px-2 py-0.5 text-[11px] font-medium text-success">
+              <LockKeyhole className="h-3 w-3" aria-hidden="true" />
+              Protected
+            </span>
+          ) : (
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+              Not protected
+            </span>
+          )}
+        </div>
+
+        <form
+          className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handlePasswordSave()
+          }}
+        >
+          <div className="min-w-0 flex-1">
+            <label htmlFor="link-password" className="label">
+              {passwordProtected ? 'New password' : 'Password'}
+            </label>
+            <input
+              ref={passwordInputRef}
+              id="link-password"
+              type="password"
+              autoComplete="new-password"
+              className="input"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder={
+                passwordProtected ? 'Update the password' : 'At least 8 characters'
+              }
+              minLength={8}
+              maxLength={128}
+              disabled={loadingRule || passwordSaving}
+            />
+          </div>
+          <button
+            type="submit"
+            className="btn btn-primary shrink-0 whitespace-nowrap"
+            disabled={
+              loadingRule ||
+              passwordSaving ||
+              password.length < 8 ||
+              !password.trim()
+            }
+          >
+            {passwordSaving ? <Spinner /> : <LockKeyhole className="h-4 w-4" aria-hidden="true" />}
+            {passwordProtected ? 'Update password' : 'Set password'}
+          </button>
+          {passwordProtected ? (
+            <button
+              type="button"
+              className="btn btn-secondary shrink-0 whitespace-nowrap"
+              onClick={() => void handlePasswordRemove()}
+              disabled={passwordSaving}
+            >
+              Remove
+            </button>
+          ) : null}
+        </form>
+
+        {passwordError ? (
+          <p
+            role="alert"
+            className="mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            {passwordError}
+          </p>
+        ) : null}
+
+        {passwordSavedAt ? (
+          <p
+            role="status"
+            className="mt-3 flex items-start gap-2 rounded-lg border border-success/30 bg-success/10 px-3 py-2 text-sm text-success"
+          >
+            <CircleCheck className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            {passwordProtected
+              ? 'Password set. Open the link above to see the unlock page.'
+              : 'Password removed. The link redirects directly again.'}
+          </p>
+        ) : null}
+
+        {passwordProtected ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Unlock sessions last one hour. Use an incognito window to see the form again.
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">
+            The password gate works independently of the schedule rule above.
+          </p>
+        )}
+      </section>
+
       <details className="card">
         <summary className="cursor-pointer text-sm font-medium text-foreground">
           Presenter notes
@@ -922,6 +1129,11 @@ export default function RulesView() {
           <li>
             Change one destination and click <span className="font-medium text-foreground">Save</span>.
             The DynamoDB JSON updates immediately; no deployment happens.
+          </li>
+          <li>
+            To demo password protection, set a password in the card above and open the link in an
+            incognito window. Try a wrong password, then the correct one. Unlock sessions last one
+            hour.
           </li>
         </ol>
       </details>

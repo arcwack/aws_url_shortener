@@ -1,6 +1,3 @@
-import { getMockStats } from './mockStats'
-import type { Stats } from './mockStats'
-
 /**
  * Base URL of the API, e.g. https://go.devansharora.in (API Gateway custom
  * domain).
@@ -28,6 +25,38 @@ export interface RuleConfigResponse {
   short_url: string
   original_url: string
   redirect_config: ScheduleConfig | null
+  password_protected: boolean
+}
+
+export interface PasswordResponse {
+  short_code: string
+  short_url: string
+  password_protected: boolean
+}
+
+export interface DailyClicks {
+  date: string
+  label: string
+  clicks: number
+}
+
+export interface RecentClick {
+  id: string
+  timestamp: string
+  country: string
+  device: string
+  matchedRule: string
+  destination: string
+}
+
+export interface Stats {
+  code: string
+  totalClicks: number
+  uniqueVisitors: number
+  topRule: string
+  lastClick: string | null
+  daily: DailyClicks[]
+  recent: RecentClick[]
 }
 
 export interface ResolvePreview {
@@ -114,7 +143,17 @@ function isRuleConfigResponse(value: unknown): value is RuleConfigResponse {
     typeof value.short_code === 'string' &&
     typeof value.short_url === 'string' &&
     typeof value.original_url === 'string' &&
-    (value.redirect_config === null || isScheduleConfig(value.redirect_config))
+    (value.redirect_config === null || isScheduleConfig(value.redirect_config)) &&
+    typeof value.password_protected === 'boolean'
+  )
+}
+
+function isPasswordResponse(value: unknown): value is PasswordResponse {
+  return (
+    isRecord(value) &&
+    typeof value.short_code === 'string' &&
+    typeof value.short_url === 'string' &&
+    typeof value.password_protected === 'boolean'
   )
 }
 
@@ -135,6 +174,42 @@ function isResolvePreview(value: unknown): value is ResolvePreview {
     typeof value.simulate_time_applied === 'boolean' &&
     typeof value.demo_forced === 'boolean' &&
     (value.demo_force_time === null || typeof value.demo_force_time === 'string')
+  )
+}
+
+function isDailyClicks(value: unknown): value is DailyClicks {
+  return (
+    isRecord(value) &&
+    typeof value.date === 'string' &&
+    typeof value.label === 'string' &&
+    typeof value.clicks === 'number'
+  )
+}
+
+function isRecentClick(value: unknown): value is RecentClick {
+  return (
+    isRecord(value) &&
+    typeof value.id === 'string' &&
+    typeof value.timestamp === 'string' &&
+    typeof value.country === 'string' &&
+    typeof value.device === 'string' &&
+    typeof value.matchedRule === 'string' &&
+    typeof value.destination === 'string'
+  )
+}
+
+function isStats(value: unknown): value is Stats {
+  return (
+    isRecord(value) &&
+    typeof value.code === 'string' &&
+    typeof value.totalClicks === 'number' &&
+    typeof value.uniqueVisitors === 'number' &&
+    typeof value.topRule === 'string' &&
+    (value.lastClick === null || typeof value.lastClick === 'string') &&
+    Array.isArray(value.daily) &&
+    value.daily.every(isDailyClicks) &&
+    Array.isArray(value.recent) &&
+    value.recent.every(isRecentClick)
   )
 }
 
@@ -228,9 +303,11 @@ export async function shortenUrl(url: string): Promise<ShortenResult> {
  *   return data as Stats
  */
 export async function getStats(code: string): Promise<Stats> {
-  // Small delay so the loading state is visible, like a real request.
-  await new Promise((resolve) => setTimeout(resolve, 400))
-  return getMockStats(code)
+  const data = await apiRequest(`/stats/${encodeURIComponent(code)}`)
+  if (!isStats(data)) {
+    throw new ApiError('The API returned unexpected stats.')
+  }
+  return data
 }
 
 /**
@@ -280,6 +357,42 @@ export async function resolvePreview(
   const data = await apiRequest(`/resolve/${encodeURIComponent(code)}${query}`)
   if (!isResolvePreview(data)) {
     throw new ApiError('The API returned an unexpected preview.')
+  }
+  return data
+}
+
+/**
+ * PUT /links/{code}/password
+ *
+ * Hashes the password in the Lambda (PBKDF2 + per-link salt). The plaintext is
+ * never stored and the response only says whether protection is on.
+ */
+export async function setLinkPassword(
+  code: string,
+  password: string,
+): Promise<PasswordResponse> {
+  const data = await apiRequest(`/links/${encodeURIComponent(code)}/password`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  if (!isPasswordResponse(data)) {
+    throw new ApiError('The API returned an unexpected password response.')
+  }
+  return data
+}
+
+/**
+ * DELETE /links/{code}/password
+ *
+ * Removes the gate so the link redirects immediately again.
+ */
+export async function removeLinkPassword(code: string): Promise<PasswordResponse> {
+  const data = await apiRequest(`/links/${encodeURIComponent(code)}/password`, {
+    method: 'DELETE',
+  })
+  if (!isPasswordResponse(data)) {
+    throw new ApiError('The API returned an unexpected password response.')
   }
   return data
 }

@@ -45,7 +45,7 @@ export const doneItems: StatusItem[] = [
   {
     id: 'dynamodb-analytics',
     title: 'DynamoDB — Analytics table',
-    detail: 'Provisioned for aggregated click events (analytics is not written yet).',
+    detail: 'One item per click, keyed by short_code + timestamp.',
   },
   {
     id: 'create-url-lambda',
@@ -62,7 +62,7 @@ export const doneItems: StatusItem[] = [
     id: 'http-api',
     title: 'HTTP API',
     detail:
-      'POST /shorten, GET /{short_code}, GET/PUT /links/{short_code}/rules and GET /resolve/{short_code}.',
+      'Shorten, redirect, rule config/preview and password set/remove/unlock routes.',
   },
   {
     id: 'smart-rules',
@@ -70,36 +70,31 @@ export const doneItems: StatusItem[] = [
     detail:
       'Weekday/weekend schedule saved to DynamoDB, evaluated in the Lambda and previewable from the UI.',
   },
-]
-
-export const inProgressItems: StatusItem[] = [
   {
-    id: 'analytics-schema',
-    title: 'Click event schema',
-    detail: 'Designing the Analytics item shape (code, timestamp, country, device).',
+    id: 'password-rule',
+    title: 'Smart Rules — password gate',
+    detail:
+      'PBKDF2 password hash, unlock form, signed HttpOnly unlock cookie and a create-link handoff.',
+  },
+  {
+    id: 'analytics-pipeline',
+    title: 'SQS ClickQueue + AnalyticsProcessor',
+    detail: 'Every redirect publishes a click; the processor writes rule and destination to Analytics.',
+  },
+  {
+    id: 'stats-endpoint',
+    title: 'GET /stats/{code} + live Stats tab',
+    detail: 'Aggregates totals, unique IPs, top rule, 7-day chart and recent clicks.',
   },
 ]
+
+export const inProgressItems: StatusItem[] = []
 
 export const plannedItems: StatusItem[] = [
-  {
-    id: 'sqs-clickqueue',
-    title: 'SQS ClickQueue + DLQ',
-    detail: 'Buffer click events; failed messages go to a dead-letter queue after 3 retries.',
-  },
-  {
-    id: 'analytics-processor',
-    title: 'AnalyticsProcessor Lambda',
-    detail: 'Consumes the queue and aggregates clicks into the Analytics table.',
-  },
   {
     id: 'observability',
     title: 'SNS + CloudWatch alarms & dashboard',
     detail: 'Alarm on DLQ depth and Lambda errors, publish to an SNS topic.',
-  },
-  {
-    id: 'stats-endpoint',
-    title: 'GET /stats/{code} endpoint',
-    detail: 'Serves live click metrics to the Stats tab.',
   },
   {
     id: 'smart-rules-extra',
@@ -118,9 +113,9 @@ export const diagramStatus: Record<string, StatusKey> = {
   lambda: 'done',
   'dynamodb-urls': 'done',
   'dynamodb-analytics': 'done',
-  'sqs-click-queue': 'planned',
-  'analytics-processor': 'planned',
-  dlq: 'planned',
+  'sqs-click-queue': 'done',
+  'analytics-processor': 'done',
+  dlq: 'done',
   'cloudwatch-alarm': 'planned',
   'sns-topic': 'planned',
 }
