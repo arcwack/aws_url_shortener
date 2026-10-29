@@ -54,13 +54,21 @@ export const doneItems: StatusItem[] = [
   },
   {
     id: 'redirect-lambda',
-    title: 'Redirect Lambda',
-    detail: 'Looks up the code, checks expiry and returns a 302 to the original URL.',
+    title: 'Redirect Lambda + rule engine',
+    detail:
+      'Looks up the code, checks expiry, evaluates redirect_config and returns a 302 with the matched rule.',
   },
   {
     id: 'http-api',
-    title: 'HTTP API (POST /shorten, GET /{short_code})',
-    detail: 'API Gateway HTTP API routing to the two Lambdas, with CORS enabled.',
+    title: 'HTTP API',
+    detail:
+      'POST /shorten, GET /{short_code}, GET/PUT /links/{short_code}/rules and GET /resolve/{short_code}.',
+  },
+  {
+    id: 'smart-rules',
+    title: 'Smart Rules — time-based',
+    detail:
+      'Weekday/weekend schedule saved to DynamoDB, evaluated in the Lambda and previewable from the UI.',
   },
 ]
 
@@ -94,9 +102,9 @@ export const plannedItems: StatusItem[] = [
     detail: 'Serves live click metrics to the Stats tab.',
   },
   {
-    id: 'smart-rules',
-    title: 'Smart Redirect Rules',
-    detail: 'Time, geo/language, device and loot-box routing in the Redirect Lambda.',
+    id: 'smart-rules-extra',
+    title: 'Geo, device and loot-box rules',
+    detail: 'Reuse the same rule engine and DynamoDB config format as the schedule rule.',
   },
 ]
 

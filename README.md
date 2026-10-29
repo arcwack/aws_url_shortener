@@ -16,11 +16,14 @@ website hosting.
   status lists. All status data lives in `src/status.ts`.
 - **Stats** — a clearly-labelled mock analytics preview: total clicks, a 7-day
   bar chart drawn with plain CSS, and a recent-clicks table.
-- **Smart Rules** — a clearly-labelled, non-functional editor mock-up for
-  time / geo / device / loot-box routing rules.
+- **Smart Rules** — live time-based routing. Edit weekday/weekend destinations
+  and the timezone, save the rule to DynamoDB, and evaluate any moment with the
+  built-in simulator. The same short URL resolves to the real 302.
+- Geo/language, device and loot-box rules are the next rule types for the same
+  engine.
 
-The Stats and Smart Rules tabs are previews. Live analytics will arrive once the
-SQS → AnalyticsProcessor pipeline is deployed.
+The Stats tab is still a preview. Live analytics will arrive once the
+SQS → AnalyticsProcessor pipeline is fixed and wired up.
 
 ## Tech stack
 
@@ -72,7 +75,7 @@ npm run lint     # run oxlint
 
 ```
 src/
-  api.ts                     shortenUrl(url) + getStats(code) (mock for now)
+  api.ts                     shorten + rule config + resolve preview calls
   status.ts                  architecture/build status data (single source of truth)
   mockStats.ts               deterministic mock analytics
   storage.ts                 localStorage helpers for "Recent links"
@@ -84,7 +87,7 @@ src/
     RecentLinks.tsx          persisted recent links list
     ArchitectureView.tsx     diagram + status lists
     StatsView.tsx            mock stats + CSS bar chart
-    RulesView.tsx            mock smart-rules editor
+    RulesView.tsx            live schedule editor + simulator
     PreviewBanner.tsx        "mock data" banner
     Spinner.tsx              inline loading spinner
   App.tsx                    header, tabs, panels, footer
@@ -93,6 +96,43 @@ src/
 
 `api.ts` reads `import.meta.env.VITE_API_URL`; the URL is never hardcoded in a
 component.
+
+### Smart-rule endpoints
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| GET | `/links/{code}/rules` | Read the stored `redirect_config` |
+| PUT | `/links/{code}/rules` | Validate and save a schedule rule to DynamoDB |
+| GET | `/resolve/{code}?simulate_time=...` | Evaluate the rule without redirecting |
+
+`simulate_time` is a naive local timestamp interpreted in the rule's timezone,
+e.g. `2026-10-31T10:00`. The simulator uses this endpoint, so demoing a weekend
+does not require changing the server clock.
+
+### Demo clock
+
+Set `DEMO_FORCE_TIME` on `RedirectFunction` to pin the server-side clock for a
+no-query-parameter demo:
+
+```bash
+DEMO_FORCE_TIME=2026-10-31T10:00:00
+```
+
+The plain short link then resolves as that moment. An explicit
+`?simulate_time=...` still takes precedence, and removing the variable returns
+the Lambda to real time.
+
+Toggle it from the repo:
+
+```bash
+./scripts/demo-clock.sh weekend   # plain URL -> weekend page
+./scripts/demo-clock.sh weekday   # plain URL -> 2s notice -> VTOP
+./scripts/demo-clock.sh off       # real time
+```
+
+The `demo/` folder contains the two destination pages: `weekday.html` shows the
+2-second “Taking you to VTOP” notice, and `weekend.html` shows “Weekend closed
+for service”. Both are uploaded to the demo S3 bucket.
 
 ## Deploying `dist/` to S3 static website hosting
 

@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="3;url=https://vtop.vit.ac.in/" />
+    <title>Redirecting to VTOP</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #000000;
+        --card: #0a0a0a;
+        --border: #262626;
+        --foreground: #ededed;
+        --muted: #a1a1a1;
+        --brand: #3291ff;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100dvh;
+        display: grid;
+        place-items: center;
+        background: var(--bg);
+        color: var(--foreground);
+        font-family:
+          system-ui,
+          -apple-system,
+          "Segoe UI",
+          Roboto,
+          "Helvetica Neue",
+          Arial,
+          sans-serif;
+      }
+
+      main {
+        width: 100%;
+        max-width: 34rem;
+        padding: 3rem 1.5rem;
+        text-align: center;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        border: 1px solid rgb(50 145 255 / 0.35);
+        background: rgb(50 145 255 / 0.1);
+        color: var(--brand);
+        border-radius: 999px;
+        padding: 0.35rem 0.75rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .dot {
+        width: 0.4rem;
+        height: 0.4rem;
+        border-radius: 999px;
+        background: var(--brand);
+        animation: pulse 1.4s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+
+      h1 {
+        margin: 1.5rem 0 0.75rem;
+        font-size: clamp(1.9rem, 5vw, 2.6rem);
+        line-height: 1.1;
+        letter-spacing: -0.04em;
+        font-weight: 650;
+      }
+
+      .lead {
+        margin: 0 auto;
+        max-width: 24rem;
+        color: var(--muted);
+        font-size: 0.95rem;
+        line-height: 1.65;
+      }
+
+      .countdown {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 0.4rem;
+        margin-top: 1.75rem;
+        padding: 0.6rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 0.75rem;
+        background: var(--card);
+        font-family:
+          ui-monospace,
+          SFMono-Regular,
+          "SF Mono",
+          Menlo,
+          Consolas,
+          monospace;
+      }
+
+      .countdown strong {
+        font-size: 1.4rem;
+        color: var(--brand);
+        font-weight: 650;
+      }
+
+      .countdown span {
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+
+      .target {
+        margin-top: 1.25rem;
+        color: #666666;
+        font-size: 0.72rem;
+        font-family:
+          ui-monospace,
+          SFMono-Regular,
+          "SF Mono",
+          Menlo,
+          Consolas,
+          monospace;
+      }
+
+      .go {
+        display: inline-block;
+        margin-top: 1.5rem;
+        color: var(--foreground);
+        font-size: 0.8rem;
+        font-weight: 500;
+        text-decoration: none;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 0.15rem;
+      }
+
+      .go:hover {
+        border-color: var(--foreground);
+      }
+
+      footer {
+        margin-top: 2rem;
+        color: #666666;
+        font-size: 0.7rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="badge"><span class="dot" aria-hidden="true"></span>Weekday branch</span>
+      <h1>Taking you to VTOP</h1>
+      <p class="lead">
+        The weekday rule is active. You&rsquo;ll be redirected to the VIT VTOP portal in a
+        moment.
+      </p>
+
+      <div class="countdown">
+        <strong id="seconds">2</strong>
+        <span id="label">seconds</span>
+      </div>
+
+      <p class="target">https://vtop.vit.ac.in/</p>
+      <a class="go" href="https://vtop.vit.ac.in/">Go there now</a>
+
+      <footer>Served by the weekday branch of the SnipCloud Smart Rules demo.</footer>
+    </main>
+
+    <script>
+      (function () {
+        var target = 'https://vtop.vit.ac.in/'
+        var seconds = 2
+        var number = document.getElementById('seconds')
+        var label = document.getElementById('label')
+
+        function render() {
+          number.textContent = String(seconds)
+          label.textContent = seconds === 1 ? 'second' : 'seconds'
+        }
+
+        render()
+
+        var timer = window.setInterval(function () {
+          seconds -= 1
+          if (seconds > 0) {
+            render()
+            return
+          }
+          window.clearInterval(timer)
+          window.location.replace(target)
+        }, 1000)
+      })()
+    </script>
+  </body>
+</html>

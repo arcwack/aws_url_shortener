@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Python
+__pycache__/
+*.pyc
+
 # Local environment (see .env.example)
 .env
 .env.*

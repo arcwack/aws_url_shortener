@@ -16,6 +16,37 @@ export interface ShortenResult {
   short_url: string
 }
 
+export interface ScheduleConfig {
+  type: 'schedule'
+  timezone: string
+  weekday_url: string
+  weekend_url: string
+}
+
+export interface RuleConfigResponse {
+  short_code: string
+  short_url: string
+  original_url: string
+  redirect_config: ScheduleConfig | null
+}
+
+export interface ResolvePreview {
+  short_code: string
+  short_url: string
+  destination: string
+  matched_rule: string
+  original_url: string
+  redirect_config: ScheduleConfig | null
+  evaluated_at: string
+  timezone: string
+  day: string
+  is_weekend: boolean
+  simulate_time: string | null
+  simulate_time_applied: boolean
+  demo_forced: boolean
+  demo_force_time: string | null
+}
+
 /**
  * Error thrown for every failure mode of the API (validation, network, 5xx).
  * `status` is 0 when the request never reached the server.
@@ -65,6 +96,69 @@ function isShortenResult(value: unknown): value is ShortenResult {
     typeof value.short_code === 'string' &&
     typeof value.short_url === 'string'
   )
+}
+
+function isScheduleConfig(value: unknown): value is ScheduleConfig {
+  return (
+    isRecord(value) &&
+    value.type === 'schedule' &&
+    typeof value.timezone === 'string' &&
+    typeof value.weekday_url === 'string' &&
+    typeof value.weekend_url === 'string'
+  )
+}
+
+function isRuleConfigResponse(value: unknown): value is RuleConfigResponse {
+  return (
+    isRecord(value) &&
+    typeof value.short_code === 'string' &&
+    typeof value.short_url === 'string' &&
+    typeof value.original_url === 'string' &&
+    (value.redirect_config === null || isScheduleConfig(value.redirect_config))
+  )
+}
+
+function isResolvePreview(value: unknown): value is ResolvePreview {
+  return (
+    isRecord(value) &&
+    typeof value.short_code === 'string' &&
+    typeof value.short_url === 'string' &&
+    typeof value.destination === 'string' &&
+    typeof value.matched_rule === 'string' &&
+    typeof value.original_url === 'string' &&
+    (value.redirect_config === null || isScheduleConfig(value.redirect_config)) &&
+    typeof value.evaluated_at === 'string' &&
+    typeof value.timezone === 'string' &&
+    typeof value.day === 'string' &&
+    typeof value.is_weekend === 'boolean' &&
+    (value.simulate_time === null || typeof value.simulate_time === 'string') &&
+    typeof value.simulate_time_applied === 'boolean' &&
+    typeof value.demo_forced === 'boolean' &&
+    (value.demo_force_time === null || typeof value.demo_force_time === 'string')
+  )
+}
+
+async function apiRequest(path: string, init?: RequestInit): Promise<unknown> {
+  if (!API_URL) {
+    throw new ApiError(
+      'The API URL is not configured. Add VITE_API_URL to your .env file and restart the dev server.',
+    )
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, init)
+  } catch {
+    throw new ApiError(
+      'Could not reach the API. Check your connection and the API Gateway CORS configuration.',
+    )
+  }
+
+  const data = await readJson(response)
+  if (!response.ok) {
+    throw new ApiError(errorMessage(data, response.status), response.status)
+  }
+  return data
 }
 
 function requestShorten(url: string, contentType: string): Promise<Response> {
@@ -137,4 +231,55 @@ export async function getStats(code: string): Promise<Stats> {
   // Small delay so the loading state is visible, like a real request.
   await new Promise((resolve) => setTimeout(resolve, 400))
   return getMockStats(code)
+}
+
+/**
+ * GET /links/{code}/rules
+ *
+ * Returns the stored redirect configuration for a short link.
+ */
+export async function getRuleConfig(code: string): Promise<RuleConfigResponse> {
+  const data = await apiRequest(`/links/${encodeURIComponent(code)}/rules`)
+  if (!isRuleConfigResponse(data)) {
+    throw new ApiError('The API returned an unexpected rule configuration.')
+  }
+  return data
+}
+
+/**
+ * PUT /links/{code}/rules
+ *
+ * Persists a schedule rule to DynamoDB. No redeploy is required.
+ */
+export async function saveScheduleRule(
+  code: string,
+  config: ScheduleConfig,
+): Promise<RuleConfigResponse> {
+  const data = await apiRequest(`/links/${encodeURIComponent(code)}/rules`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ redirect_config: config }),
+  })
+  if (!isRuleConfigResponse(data)) {
+    throw new ApiError('The API returned an unexpected rule configuration.')
+  }
+  return data
+}
+
+/**
+ * GET /resolve/{code}?simulate_time=...
+ *
+ * Evaluates the rule without redirecting, so the simulator can show exactly
+ * which destination would be chosen for a given moment.
+ */
+export async function resolvePreview(
+  code: string,
+  simulateTime?: string,
+): Promise<ResolvePreview> {
+  const query = simulateTime ? `?simulate_time=${encodeURIComponent(simulateTime)}` : ''
+  const data = await apiRequest(`/resolve/${encodeURIComponent(code)}${query}`)
+  if (!isResolvePreview(data)) {
+    throw new ApiError('The API returned an unexpected preview.')
+  }
+  return data
 }
