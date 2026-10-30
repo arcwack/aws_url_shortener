@@ -24,6 +24,9 @@ website hosting.
   app opens Smart Rules for password setup. Protected links show an unlock form;
   only a PBKDF2 hash with a per-link salt is stored. It composes with the
   schedule rule.
+- **Security Lab** — an admin-only “Try to hack me” tab that attacks only the
+  dedicated `labdemo` link with 50 common passwords, shows attempts live, and
+  demonstrates the 3-attempt / 30-second per-IP unlock rate limit.
 - Geo/language, device and loot-box rules are the next rule types for the same
   engine.
 
@@ -93,6 +96,7 @@ src/
     ArchitectureView.tsx     diagram + status lists
     StatsView.tsx            live stats + CSS bar chart
     RulesView.tsx            live schedule editor + simulator
+    SecurityLabView.tsx      admin-gated attack simulator
     Spinner.tsx              inline loading spinner
   App.tsx                    header, tabs, panels, footer
   index.css                  Tailwind import, theme tokens, component classes
@@ -112,6 +116,10 @@ component.
 | POST | `/{code}/unlock` | Verify the password and set the unlock cookie |
 | GET | `/resolve/{code}?simulate_time=...` | Evaluate the rule without redirecting |
 | GET | `/stats/{code}` | Live click aggregates for the Stats tab |
+| GET | `/lab/status` | Admin-only lab status |
+| PUT | `/lab/protection` | Admin-only rate-limit toggle for labdemo |
+| POST | `/lab/attempt` | Admin-only password attempt against labdemo |
+| POST | `/lab/reset` | Admin-only reset to welcome1, protection off |
 
 `simulate_time` is a naive local timestamp interpreted in the rule's timezone,
 e.g. `2026-10-31T10:00`. The simulator uses this endpoint, so demoing a weekend
@@ -149,6 +157,25 @@ salt per link. Wrong passwords are compared in constant time and add a short
 delay. Successful unlocks receive a signed `HttpOnly; Secure; SameSite=Lax`
 cookie valid for one hour, signed with `UNLOCK_COOKIE_SECRET` and the link’s
 `password_version`. Changing or removing the password invalidates old cookies.
+
+### Security Lab
+
+`UnlockRateLimits` stores per-link, per-IP failure counts with a TTL. After 3
+wrong passwords the unlock endpoint returns 429 for 30 seconds; a correct
+password clears the counter. The Security Lab toggle only affects the hardcoded
+`labdemo` link.
+
+Seed the lab and get the admin key:
+
+```bash
+./scripts/seed-labdemo.sh
+./scripts/lab-admin-key.sh
+```
+
+The lab password is `welcome1`. Demo sequence: protection **off** → Launch
+attack → cracked; toggle protection **on** → Launch attack → blocked after 3
+wrong attempts. The attack API is hardcoded to `labdemo` and cannot target any
+other link.
 
 ## Deploying `dist/` to S3 static website hosting
 

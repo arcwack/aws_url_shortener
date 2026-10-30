@@ -59,6 +59,22 @@ export interface Stats {
   recent: RecentClick[]
 }
 
+export interface LabStatus {
+  code: string
+  short_url: string
+  protection_enabled: boolean
+  password_protected: boolean
+  max_failures: number
+  lock_seconds: number
+}
+
+export interface LabAttemptResult {
+  result: 'wrong' | 'blocked' | 'cracked'
+  statusCode: number
+  failures?: number
+  retryAfter?: number
+}
+
 export interface ResolvePreview {
   short_code: string
   short_url: string
@@ -213,6 +229,28 @@ function isStats(value: unknown): value is Stats {
   )
 }
 
+function isLabStatus(value: unknown): value is LabStatus {
+  return (
+    isRecord(value) &&
+    typeof value.code === 'string' &&
+    typeof value.short_url === 'string' &&
+    typeof value.protection_enabled === 'boolean' &&
+    typeof value.password_protected === 'boolean' &&
+    typeof value.max_failures === 'number' &&
+    typeof value.lock_seconds === 'number'
+  )
+}
+
+function isLabAttemptResult(value: unknown): value is LabAttemptResult {
+  return (
+    isRecord(value) &&
+    (value.result === 'wrong' || value.result === 'blocked' || value.result === 'cracked') &&
+    typeof value.statusCode === 'number' &&
+    (value.failures === undefined || typeof value.failures === 'number') &&
+    (value.retryAfter === undefined || typeof value.retryAfter === 'number')
+  )
+}
+
 async function apiRequest(path: string, init?: RequestInit): Promise<unknown> {
   if (!API_URL) {
     throw new ApiError(
@@ -226,6 +264,36 @@ async function apiRequest(path: string, init?: RequestInit): Promise<unknown> {
   } catch {
     throw new ApiError(
       'Could not reach the API. Check your connection and the API Gateway CORS configuration.',
+    )
+  }
+
+  const data = await readJson(response)
+  if (!response.ok) {
+    throw new ApiError(errorMessage(data, response.status), response.status)
+  }
+  return data
+}
+
+async function labRequest(
+  path: string,
+  adminKey: string,
+  init?: RequestInit,
+): Promise<unknown> {
+  if (!API_URL) {
+    throw new ApiError(
+      'The API URL is not configured. Add VITE_API_URL to your .env file and restart the dev server.',
+    )
+  }
+
+  const headers = new Headers(init?.headers)
+  headers.set('x-admin-key', adminKey)
+
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...init, headers })
+  } catch {
+    throw new ApiError(
+      'Could not reach the security lab API. Check your connection and CORS settings.',
     )
   }
 
@@ -393,6 +461,70 @@ export async function removeLinkPassword(code: string): Promise<PasswordResponse
   })
   if (!isPasswordResponse(data)) {
     throw new ApiError('The API returned an unexpected password response.')
+  }
+  return data
+}
+
+/**
+ * GET /lab/status — admin only.
+ */
+export async function getLabStatus(adminKey: string): Promise<LabStatus> {
+  const data = await labRequest('/lab/status', adminKey)
+  if (!isLabStatus(data)) {
+    throw new ApiError('The API returned an unexpected lab status.')
+  }
+  return data
+}
+
+/**
+ * PUT /lab/protection — admin only. Only affects the hardcoded labdemo link.
+ */
+export async function setLabProtection(
+  adminKey: string,
+  enabled: boolean,
+): Promise<LabStatus> {
+  const data = await labRequest('/lab/protection', adminKey, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  })
+  if (!isLabStatus(data)) {
+    throw new ApiError('The API returned an unexpected lab status.')
+  }
+  return data
+}
+
+/**
+ * POST /lab/attempt — admin only. The Lambda always targets labdemo, never a
+ * client-supplied code.
+ */
+export async function attemptLabPassword(
+  adminKey: string,
+  password: string,
+): Promise<LabAttemptResult> {
+  const data = await labRequest('/lab/attempt', adminKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password }),
+  })
+  if (!isLabAttemptResult(data)) {
+    throw new ApiError('The API returned an unexpected lab result.')
+  }
+  return data
+}
+
+/**
+ * POST /lab/reset — admin only. Restores welcome1, clears limits and turns
+ * protection off for the demo.
+ */
+export async function resetLab(adminKey: string): Promise<LabStatus> {
+  const data = await labRequest('/lab/reset', adminKey, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  })
+  if (!isLabStatus(data)) {
+    throw new ApiError('The API returned an unexpected lab status.')
   }
   return data
 }

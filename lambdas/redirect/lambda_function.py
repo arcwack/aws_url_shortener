@@ -1,4 +1,5 @@
 import base64
+import hmac
 import json
 import os
 import time
@@ -10,6 +11,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 import passwords
+import rate_limit
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ.get("TABLE_NAME", "URLs"))
@@ -28,6 +30,27 @@ try:
     UNLOCK_TTL_SECONDS = int(os.environ.get("UNLOCK_TTL_SECONDS", "3600"))
 except ValueError:
     UNLOCK_TTL_SECONDS = 3600
+
+RATE_LIMIT_TABLE = os.environ.get("RATE_LIMIT_TABLE", "UnlockRateLimits")
+try:
+    RATE_LIMIT_MAX = int(os.environ.get("RATE_LIMIT_MAX", "3"))
+except ValueError:
+    RATE_LIMIT_MAX = 3
+try:
+    RATE_LIMIT_LOCK_SECONDS = int(os.environ.get("RATE_LIMIT_LOCK_SECONDS", "30"))
+except ValueError:
+    RATE_LIMIT_LOCK_SECONDS = 30
+
+LAB_DEMO_CODE = os.environ.get("LAB_DEMO_CODE", "labdemo")
+LAB_ADMIN_KEY = os.environ.get("LAB_ADMIN_KEY", "")
+LAB_WEAK_PASSWORD = "welcome1"
+
+rate_limit_table = dynamodb.Table(RATE_LIMIT_TABLE)
+rate_limiter = rate_limit.RateLimiter(
+    rate_limit_table,
+    max_failures=RATE_LIMIT_MAX,
+    lock_seconds=RATE_LIMIT_LOCK_SECONDS,
+)
 SUPPORTED_RULES = {"schedule"}
 
 
@@ -177,6 +200,37 @@ def _has_unlock_cookie(event, code, item):
         passwords.password_version(item),
         UNLOCK_COOKIE_SECRET,
     )
+
+
+def _client_ip(event):
+    http_data = (event.get("requestContext") or {}).get("http") or {}
+    source_ip = http_data.get("sourceIp")
+    if source_ip:
+        return source_ip
+    forwarded = _headers(event).get("x-forwarded-for", "")
+    return forwarded.split(",")[0].strip() or "unknown"
+
+
+def _admin_ok(event):
+    provided = _headers(event).get("x-admin-key", "")
+    return bool(LAB_ADMIN_KEY and provided and hmac.compare_digest(provided, LAB_ADMIN_KEY))
+
+
+def _rate_limit_enabled(code, item):
+    if code == LAB_DEMO_CODE:
+        return bool(item.get("rate_limit_enabled", False))
+    return True
+
+
+def _lab_status_payload(event, item):
+    return {
+        "code": LAB_DEMO_CODE,
+        "short_url": _short_url(event, LAB_DEMO_CODE),
+        "protection_enabled": bool(item.get("rate_limit_enabled", False)),
+        "password_protected": bool(item.get("password_hash")),
+        "max_failures": RATE_LIMIT_MAX,
+        "lock_seconds": RATE_LIMIT_LOCK_SECONDS,
+    }
 
 
 def _clean_schedule_config(raw):
@@ -329,9 +383,43 @@ def _handle_unlock(event):
     except Exception:
         form = {}
 
+    ip = _client_ip(event)
+    limited = _rate_limit_enabled(code, item)
+
+    if limited:
+        try:
+            retry_after = rate_limiter.lock_remaining(code, ip)
+        except ClientError as exc:
+            print(f"Rate limit read failed: {exc}")
+            return _html_response(500, "Security check unavailable")
+
+        if retry_after > 0:
+            response = _html_response(
+                429,
+                _password_page(
+                    event,
+                    code,
+                    f"Too many attempts. Try again in {retry_after} seconds.",
+                ),
+            )
+            response["headers"]["Retry-After"] = str(retry_after)
+            return response
+
     if not passwords.verify_password(form.get("password", ""), stored):
+        if limited:
+            try:
+                rate_limiter.record_failure(code, ip)
+            except ClientError as exc:
+                print(f"Rate limit write failed: {exc}")
+                return _html_response(500, "Security check unavailable")
         time.sleep(0.25)
         return _html_response(401, _password_page(event, code, "Incorrect password. Try again."))
+
+    if limited:
+        try:
+            rate_limiter.reset(code, ip)
+        except ClientError as exc:
+            print(f"Rate limit reset failed: {exc}")
 
     target, rule = resolve_target(item, event)
     if not _valid_url(target):
@@ -359,6 +447,170 @@ def _handle_unlock(event):
         "cookies": [cookie],
         "body": "",
     }
+
+
+def _handle_lab_status(event):
+    if not _admin_ok(event):
+        return _json_response(401, {"error": "Admin key required"})
+
+    try:
+        item = _load_item(LAB_DEMO_CODE)
+    except ClientError as exc:
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    if not item or _is_expired(item):
+        return _json_response(404, {"error": "labdemo is not seeded or has expired"})
+
+    return _json_response(200, _lab_status_payload(event, item))
+
+
+def _handle_lab_protection(event):
+    if not _admin_ok(event):
+        return _json_response(401, {"error": "Admin key required"})
+
+    try:
+        body = _parse_body(event)
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            raise ValueError("enabled must be true or false")
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response(400, {"error": str(exc)})
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        result = table.update_item(
+            Key={"short_code": LAB_DEMO_CODE},
+            UpdateExpression="SET rate_limit_enabled = :enabled, updated_at = :now",
+            ConditionExpression="attribute_exists(short_code)",
+            ExpressionAttributeValues={":enabled": enabled, ":now": now},
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _json_response(404, {"error": "labdemo is not seeded"})
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    if enabled:
+        try:
+            rate_limiter.reset_all(LAB_DEMO_CODE)
+        except ClientError as exc:
+            print(f"Rate limit reset failed: {exc}")
+            return _json_response(500, {"error": "Could not reset lab rate limits"})
+
+    item = result.get("Attributes") or {}
+    return _json_response(200, _lab_status_payload(event, item))
+
+
+def _handle_lab_attempt(event):
+    if not _admin_ok(event):
+        return _json_response(401, {"error": "Admin key required"})
+
+    try:
+        item = _load_item(LAB_DEMO_CODE)
+    except ClientError as exc:
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    if not item or _is_expired(item):
+        return _json_response(404, {"error": "labdemo is not seeded or has expired"})
+
+    stored = item.get("password_hash")
+    if not stored:
+        return _json_response(400, {"error": "labdemo has no password set"})
+
+    try:
+        body = _parse_body(event)
+        password = body.get("password")
+        if not isinstance(password, str):
+            raise ValueError("password must be a string")
+    except (ValueError, json.JSONDecodeError) as exc:
+        return _json_response(400, {"error": str(exc)})
+
+    ip = _client_ip(event)
+    limited = bool(item.get("rate_limit_enabled", False))
+
+    if limited:
+        try:
+            retry_after = rate_limiter.lock_remaining(LAB_DEMO_CODE, ip)
+        except ClientError as exc:
+            print(f"Rate limit read failed: {exc}")
+            return _json_response(500, {"error": "Rate limit check failed"})
+
+        if retry_after > 0:
+            return _json_response(
+                200,
+                {
+                    "result": "blocked",
+                    "statusCode": 429,
+                    "retryAfter": retry_after,
+                },
+            )
+
+    if not passwords.verify_password(password, stored):
+        failures = 0
+        if limited:
+            try:
+                failures, _ = rate_limiter.record_failure(LAB_DEMO_CODE, ip)
+            except ClientError as exc:
+                print(f"Rate limit write failed: {exc}")
+                return _json_response(500, {"error": "Rate limit write failed"})
+        return _json_response(
+            200,
+            {"result": "wrong", "statusCode": 401, "failures": failures},
+        )
+
+    if limited:
+        try:
+            rate_limiter.reset(LAB_DEMO_CODE, ip)
+        except ClientError as exc:
+            print(f"Rate limit reset failed: {exc}")
+
+    return _json_response(200, {"result": "cracked", "statusCode": 302})
+
+
+def _handle_lab_reset(event):
+    if not _admin_ok(event):
+        return _json_response(401, {"error": "Admin key required"})
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    try:
+        password_hash = passwords.hash_password(LAB_WEAK_PASSWORD)
+    except ValueError as exc:
+        return _json_response(500, {"error": str(exc)})
+
+    try:
+        result = table.update_item(
+            Key={"short_code": LAB_DEMO_CODE},
+            UpdateExpression=(
+                "SET password_hash = :hash, password_version = :now, "
+                "password_updated_at = :now, rate_limit_enabled = :disabled, "
+                "expires_at = :expires, updated_at = :now"
+            ),
+            ConditionExpression="attribute_exists(short_code)",
+            ExpressionAttributeValues={
+                ":hash": password_hash,
+                ":now": now,
+                ":disabled": False,
+                ":expires": 2000000000,
+            },
+            ReturnValues="ALL_NEW",
+        )
+    except ClientError as exc:
+        if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return _json_response(404, {"error": "labdemo is not seeded"})
+        print(f"DynamoDB error: {exc}")
+        return _json_response(500, {"error": "Internal error"})
+
+    try:
+        rate_limiter.reset_all(LAB_DEMO_CODE)
+    except ClientError as exc:
+        print(f"Rate limit reset failed: {exc}")
+        return _json_response(500, {"error": "Could not reset lab rate limits"})
+
+    item = result.get("Attributes") or {}
+    return _json_response(200, _lab_status_payload(event, item))
 
 
 def _handle_put_rules(event):
@@ -517,6 +769,14 @@ def _handle_redirect(event):
 def lambda_handler(event, context):
     route = event.get("routeKey") or ""
 
+    if route == "GET /lab/status":
+        return _handle_lab_status(event)
+    if route == "PUT /lab/protection":
+        return _handle_lab_protection(event)
+    if route == "POST /lab/attempt":
+        return _handle_lab_attempt(event)
+    if route == "POST /lab/reset":
+        return _handle_lab_reset(event)
     if route == "POST /{short_code}/unlock":
         return _handle_unlock(event)
     if route == "PUT /links/{short_code}/password":

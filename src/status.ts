@@ -31,6 +31,45 @@ export const legend: LegendEntry[] = [
   { key: 'planned', label: 'Planned', description: 'Not started yet' },
 ]
 
+export interface ReliabilityItem {
+  id: string
+  title: string
+  detail: string
+}
+
+export const reliabilityItems: ReliabilityItem[] = [
+  {
+    id: 'redirect-route',
+    title: 'Redirect route wired',
+    detail: 'GET /{short_code} is attached to RedirectFunction and deployed to the $default stage.',
+  },
+  {
+    id: 'sqs-permission',
+    title: 'SQS send permission',
+    detail: 'RedirectRole can publish click events to ClickQueue (and its DLQ) only.',
+  },
+  {
+    id: 'analytics-schema',
+    title: 'Click schema fixed',
+    detail: 'Analytics uses short_code + timestamp (String), matching what the processor writes.',
+  },
+  {
+    id: 'node-processor',
+    title: 'Node.js AnalyticsProcessor',
+    detail: 'index.mjs with AWS SDK v3, UUID click IDs and a scoped IAM policy.',
+  },
+  {
+    id: 'dlq-redrive',
+    title: 'DLQ redrive',
+    detail: 'ClickQueue moves a message to ClickQueue-DLQ after 3 failed receives.',
+  },
+  {
+    id: 'alarm-email',
+    title: 'Alarm + email',
+    detail: 'CloudWatch alarms on DLQ depth and publishes to SNS DLQ-Alerts; the email is confirmed.',
+  },
+]
+
 export const doneItems: StatusItem[] = [
   {
     id: 'iam-budget',
@@ -86,16 +125,22 @@ export const doneItems: StatusItem[] = [
     title: 'GET /stats/{code} + live Stats tab',
     detail: 'Aggregates totals, unique IPs, top rule, 7-day chart and recent clicks.',
   },
+  {
+    id: 'observability',
+    title: 'SNS + CloudWatch alarm',
+    detail: 'DLQ depth alarm publishes to DLQ-Alerts; the email subscription is confirmed.',
+  },
+  {
+    id: 'security-lab',
+    title: 'Security Lab + unlock rate limiting',
+    detail:
+      'Per-IP DynamoDB rate limit after 3 wrong passwords, 30-second lock, and an admin-gated attack simulator.',
+  },
 ]
 
 export const inProgressItems: StatusItem[] = []
 
 export const plannedItems: StatusItem[] = [
-  {
-    id: 'observability',
-    title: 'SNS + CloudWatch alarms & dashboard',
-    detail: 'Alarm on DLQ depth and Lambda errors, publish to an SNS topic.',
-  },
   {
     id: 'smart-rules-extra',
     title: 'Geo, device and loot-box rules',
@@ -116,8 +161,8 @@ export const diagramStatus: Record<string, StatusKey> = {
   'sqs-click-queue': 'done',
   'analytics-processor': 'done',
   dlq: 'done',
-  'cloudwatch-alarm': 'planned',
-  'sns-topic': 'planned',
+  'cloudwatch-alarm': 'done',
+  'sns-topic': 'done',
 }
 
 export function getDiagramStatus(id: string): StatusKey {

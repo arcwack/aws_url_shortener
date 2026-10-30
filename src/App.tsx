@@ -5,6 +5,7 @@ import ArchitectureView from './components/ArchitectureView'
 import RecentLinks from './components/RecentLinks'
 import ResultCard from './components/ResultCard'
 import RulesView from './components/RulesView'
+import SecurityLabView from './components/SecurityLabView'
 import ShortenForm from './components/ShortenForm'
 import StatsView from './components/StatsView'
 import Tabs from './components/Tabs'
@@ -12,13 +13,14 @@ import ThemeToggle from './components/ThemeToggle'
 import { MAX_RECENT_LINKS, loadRecentLinks, saveRecentLinks } from './storage'
 import type { RecentLink } from './storage'
 
-type TabId = 'shorten' | 'architecture' | 'stats' | 'rules'
+type TabId = 'shorten' | 'architecture' | 'stats' | 'rules' | 'security'
 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'shorten', label: 'Shorten' },
   { id: 'architecture', label: 'Architecture' },
   { id: 'stats', label: 'Stats' },
   { id: 'rules', label: 'Smart Rules' },
+  { id: 'security', label: 'Security Lab' },
 ]
 
 export default function App() {
@@ -122,6 +124,7 @@ export default function App() {
               passwordSetupNonce={passwordSetup?.nonce}
             />
           ) : null}
+          {activeTab === 'security' ? <SecurityLabView /> : null}
         </div>
       </main>
 
